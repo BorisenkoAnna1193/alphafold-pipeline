@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Скачивание из базы данных AlphaFold по срезам — mvp</title>
+
+</head>
+<body>
+<h1>Скачивание из базы данных AlphaFold по срезам</h1>
+
+
+<div class="tabs">
+  <button type="button" onclick="showTab('search')" id="btn-search">Скачивание</button>
+  <button type="button" onclick="showTab('refs')" id="btn-refs">Справочники для фильтрации</button>
+</div>
+
+<!-- ======================= Вкладка 1: скачать ======================= -->
+<div class="tab" id="tab-download">
+  <form method="post">
+    <input type="hidden" name="tab" value="download">
+
+    <label for="filter">Фильтр</label>
+    <select name="filter" id="filter">
+      {% for key, title in filters.items() %}
+        <option value="{{ key }}" {% if form.get('filter') == key %}selected{% endif %}>{{ title }}</option>
+      {% endfor %}
+    </select>
+
+    <label for="value">Значение</label>
+    <input type="text" name="value" id="value" value="{{ form.get('value', '') }}" >
+
+    <label for="format">Тип файла для выгрузки</label>
+    <select name="format" id="format">
+      {% for key, (field, title) in file_types.items() %}
+        <option value="{{ key }}" {% if form.get('format') == key %}selected{% endif %}>{{ key }} — {{ title }}</option>
+      {% endfor %}
+    </select>
+
+    <p><button type="submit">Скачать</button></p>
+  </form>
+
+
+   <!-- {% if query %}<div class="query">{{ query }}</div>{% endif %}
+ {% if message %}<div class="msg">{{ message }}</div>{% endif %} 
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if log %}<details open><summary>Журнал (как print в ноутбуке)</summary><pre class="log">{{ log }}</pre></details>{% endif %} -->
+</div>
+
+<!-- ======================= Вкладка 2: справочники ======================= -->
+<div class="tab" id="tab-refs">
+  <p>Найдите нужную строку, скопируйте <b>ID</b> и вставьте его в поле «Значение» на вкладке «Скачать».</p>
+
+  <input type="text" id="refsearch"  oninput="filterTables(this.value)">
+
+  <h2>Организмы (фильтр «Организм»)</h2>
+  <table id="organisms">
+    <tr><th>ID</th><th>Имя</th><th>Описание</th></tr>
+    {% for r in organisms %}
+    <tr><td><code>{{ r.id }}</code></td><td>{{ r.name }}</td><td>{{ r.description }}</td></tr>
+    {% endfor %}
+  </table>
+
+
+  <h2>Ключевые слова UniProt (фильтр «Ключевое слово»)</h2>
+  <p>{{ keywords | length }} ключевых слов, в описании в скобках указана категория:
+     <a href="https://www.uniprot.org/keywords">uniprot.org/keywords</a>.</p>
+  <table id="keywords">
+    <tr><th>ID</th><th>Имя</th><th>Описание</th></tr>
+    {% for r in keywords %}
+    <tr><td><code>{{ r.id }}</code></td><td>{{ r.name }}</td><td>{{ r.description }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<script>
+
+  function showTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    document.getElementById('btn-' + name).classList.add('active');
+  }
+
+  function filterTables(text) {
+    const q = text.toLowerCase();
+    document.querySelectorAll('#organisms tr, #keywords tr').forEach(row => {
+      if (row.querySelector('th')) return;         
+      row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+  }
+  showTab('{{ tab }}');
+</script>
+</body>
+</html>

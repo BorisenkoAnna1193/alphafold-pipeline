@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+.venv-1/
+*.pyc
+.ipynb_checkpoints/
+# macOS и VSCode
+.DS_Store
+.vscode/
+data/*.tsv
+# Скачанные данные
+raw_data/
+*.cif
+*.pdb
+*.png
+downloads/
+# Секреты
+.env
+
