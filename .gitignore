@@ -15,4 +15,5 @@ raw_data/
 downloads/
 # Секреты
 .env
+claude_notes.md
 
