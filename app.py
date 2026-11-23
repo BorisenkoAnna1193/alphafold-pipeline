@@ -20,6 +20,8 @@ import requests  # to make HTTP requests to the API
 from flask import Flask, render_template, request
 from requests.adapters import HTTPAdapter, Retry
 
+from tracker import Tracker
+
 AFDB_API = "https://alphafold.ebi.ac.uk/api/prediction/{acc}"
 UNIPROT_API = "https://rest.uniprot.org"
 
@@ -27,6 +29,8 @@ UNIPROT_API = "https://rest.uniprot.org"
 BASE_DIR = Path(__file__).resolve().parent
 REFS_DIR = BASE_DIR / "uniprot_dicts"
 OUT_DIR = BASE_DIR / "downloads"
+
+DB_PATH = OUT_DIR / "downloads.db"
 
 UNIPROT_SEARCH = "https://rest.uniprot.org/uniprotkb/search"
 AFDB_API_BASE_URL = "https://alphafold.ebi.ac.uk/api/prediction/"
@@ -190,16 +194,16 @@ def collect_urls(entry: dict, file_type: str) -> dict:
     """Из одной записи API собрать словарь «тип файла → ссылка».
     file_type = "all" — все доступные, иначе только один тип."""
     urls_to_download = {}
-    for file_type, (
+    for ftype, (
         field,
         _,
     ) in FILE_TYPES.items():  # check it was successful and that we have a list
-        if file_type != "all" and file_type != file_type:
+        if ftype != "all" and ftype != file_type:
             continue
         if entry.get(field):  # #check it was successful and that we have a list
-            urls_to_download[file_type] = entry[field]
-            print(f"🔗 {file_type}: {entry[field]}")
-        elif file_type == "alphamissense_tsv":
+            urls_to_download[ftype] = entry[field]
+            print(f"🔗 {ftype}: {entry[field]}")
+        elif ftype == "alphamissense_tsv":
             print(
                 "⚠️ No AlphaMissense annotations available for this entry. Is it human?"
             )
@@ -208,66 +212,109 @@ def collect_urls(entry: dict, file_type: str) -> dict:
     return urls_to_download
 
 
-def download_files(url_dictionary: dict, destination_path: Path) -> int:
+def download_files(
+    url_dictionary: dict, destination_path: Path, tracker: Tracker, entry_id: str
+) -> dict:
 
     if not destination_path.exists():  # if the folder doesn't exist
         os.makedirs(destination_path)
 
     downloaded = 0
-    uniprot_id = "unknown"
+    skipped = 0
+    failed = 0
     for file_type, url in url_dictionary.items():
         if not url:  #  Skip if a URL is empty or None
             print(f"🚫 Skipping {file_type} as URL is missing.")
             continue
+        original_filename = url.split("/")[-1]
+        file_extension = (
+            "." + original_filename.split(".")[-1] if "." in original_filename else ""
+        )
+
+        if file_type == "cif":
+            filename = f"{entry_id}_model{file_extension or '.cif'}"
+        elif file_type == "pdb":
+            filename = f"{entry_id}_model{file_extension or '.pdb'}"
+        elif file_type == "pae_image":
+            filename = f"{entry_id}_pae{file_extension or '.png'}"
+        elif file_type == "alphamissense_tsv":  # Assuming you used this key earlier
+            filename = f"{entry_id}_alphamissense{file_extension or '.tsv'}"  # Or .csv if it's a csv
+        else:
+            filename = f"{entry_id}_{file_type}{file_extension}"
+
+        full_file_path = destination_path / filename
+        if not tracker.should_download(entry_id, file_type, full_file_path):
+            print(f"Already have {filename}, skipping")
+            skipped += 1
+            continue
         try:
-            original_filename = url.split("/")[-1]
-            match = re.search(r"AF-([A-Z0-9]+)-F\d+", url)
-            if match:
-                uniprot_id = match.group(1)
-            file_extension = (
-                "." + original_filename.split(".")[-1]
-                if "." in original_filename
-                else ""
-            )
-
-            if file_type == "cif":
-                filename = f"{uniprot_id}_model{file_extension or '.cif'}"
-            elif file_type == "pdb":
-                filename = f"{uniprot_id}_model{file_extension or '.pdb'}"
-            elif file_type == "pae_image":
-                filename = f"{uniprot_id}_pae{file_extension or '.png'}"
-            elif file_type == "alphamissense_tsv":  # Assuming you used this key earlier
-                filename = f"{uniprot_id}_alphamissense{file_extension or '.tsv'}"  # Or .csv if it's a csv
-            else:
-                filename = f"{uniprot_id}_{file_type}{file_extension}"
-
-            full_file_path = destination_path / filename
             file_response = requests.get(url, stream=True, timeout=30)
             if file_response.status_code == 200:
-                with open(full_file_path, "wb") as f:
+                tmp_path = full_file_path.with_name(full_file_path.name + ".part")
+                with open(tmp_path, "wb") as f:
                     for chunk in file_response.iter_content(
                         chunk_size=8192
                     ):  # Download in 8KB chunks
                         f.write(chunk)
-                    print(f"  ✅ Successfully downloaded: {filename}")
+                tmp_path.rename(
+                    full_file_path
+                )  # Rename to final filename after download
+                #   print(f"  ✅ Successfully downloaded: {filename}")
+                size = full_file_path.stat().st_size
+                tracker.record(
+                    entry_id,
+                    file_type,
+                    "ok",
+                    filename=filename,
+                    url=url,
+                    http_status=200,
+                    size_bytes=size,
+                )
                 downloaded += 1
+            elif file_response.status_code == 404:
+                print(f"Not found on server: {file_type}")
+                tracker.record(
+                    entry_id,
+                    file_type,
+                    "not_found",
+                    filename=filename,
+                    url=url,
+                    http_status=404,
+                    error_message=file_response.reason,
+                )
+                failed += 1
             else:
                 print(
                     f"  ❌ Failed to download {file_type}. Status: {file_response.status_code} - {file_response.reason}"
                 )
+                tracker.record(
+                    entry_id,
+                    file_type,
+                    "failed",
+                    filename=filename,
+                    url=url,
+                    http_status=file_response.status_code,
+                    error_message=file_response.reason,
+                )
+                failed += 1
 
         except requests.exceptions.RequestException as e:
             print(f"  🚫 Error downloading {file_type} from {url}: {e}")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"  🛑 An unexpected error occurred with {file_type}: {e}")
             print("-" * 20)  # Separator for each file download attempt
 
-    print("=" * 30 + f"\n🏁 All attempted downloads for {uniprot_id} complete.")
-    return downloaded
+    tracker.record(
+        entry_id, file_type, "failed", filename=filename, url=url, error_message=str(e)
+    )
+    failed += 1
+    print("=" * 30 + f"\n🏁 All attempted downloads for {entry_id} complete.")
+    return {"downloaded": downloaded, "skipped": skipped, "failed": failed}
 
 
 def download(query: str, wanted: str, out: Path) -> dict:
-
+    out.mkdir(parents=True, exist_ok=True)
+    tracker = Tracker(DB_PATH)
     proteins, total = search_uniprot(query, LIMIT)
     stats = {
         "total": total,
@@ -276,30 +323,36 @@ def download(query: str, wanted: str, out: Path) -> dict:
         "no model": 0,
         "models": 0,
         "files": 0,
+        "skipped": 0,
+        "failed": 0,
     }
     rows = []
-    for protein in proteins:
-        acc = protein["Entry"]
-        api_response = get_afdb_response(acc)
-        if not (isinstance(api_response, list) and api_response):
-            stats["no model"] += 1
-            rows.append({**protein, "model": "", "status": "no model", "plddt": ""})
-            continue
-        stats["ok"] += 1
-        for entry in api_response:
-            urls_to_download = collect_urls(entry, wanted)
-            stats["files"] += download_files(urls_to_download, out)
-            stats["models"] += 1
-            rows.append(
-                {
-                    **protein,
-                    "model": entry["entryId"],
-                    "status": "ok",
-                    "plddt": entry.get("globalMetricValue", ""),
-                }
-            )
+    try:
+        for protein in proteins:
+            acc = protein["Entry"]
+            api_response = get_afdb_response(acc)
+            if not (isinstance(api_response, list) and api_response):
+                stats["no model"] += 1
+                rows.append({**protein, "model": "", "status": "no model", "plddt": ""})
+                continue
+            stats["ok"] += 1
+            for entry in api_response:
+                urls_to_download = collect_urls(entry, wanted)
+                res = download_files(urls_to_download, out, tracker, entry["entryId"])
+                stats["files"] += res["downloaded"]
+                stats["skipped"] += res["skipped"]
+                stats["models"] += 1
+                rows.append(
+                    {
+                        **protein,
+                        "model": entry["entryId"],
+                        "status": "ok",
+                        "plddt": entry.get("globalMetricValue", ""),
+                    }
+                )
+    finally:
+        tracker.close()
 
-    out.mkdir(parents=True, exist_ok=True)
     with open(out / "metadata.tsv", "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f, fieldnames=list(rows[0]) if rows else ["Entry"], delimiter="\t"
@@ -338,7 +391,8 @@ def index():
                 message = (
                     f"Найдено белков: {stats['total']}, обработано: {stats['processed']} "
                     f"(с моделью {stats['ok']}, без модели {stats['no model']}), "
-                    f"скачано файлов: {stats['files']}. Папка: {OUT_DIR}"
+                    f"скачано файлов: {stats['files']}, пропущено (уже были): {stats['skipped']}, "
+                    f"ошибок: {stats['failed']}. Папка: {OUT_DIR}"
                 )
             except requests.HTTPError as e:
                 error = f"Сервер ответил ошибкой: {e}"
