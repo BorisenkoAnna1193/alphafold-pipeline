@@ -262,7 +262,7 @@ def download_files(url_dictionary: dict, destination_path: Path) -> int:
             print(f"  🛑 An unexpected error occurred with {file_type}: {e}")
             print("-" * 20)  # Separator for each file download attempt
 
-        print("=" * 30 + f"\n🏁 All attempted downloads for {uniprot_id} complete.")
+    print("=" * 30 + f"\n🏁 All attempted downloads for {uniprot_id} complete.")
     return downloaded
 
 
